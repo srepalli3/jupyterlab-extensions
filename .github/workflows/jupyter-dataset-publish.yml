@@ -1,0 +1,78 @@
+name: Publish jupyter-dataset
+
+on:
+  pull_request:
+    paths:
+      - "jupyter-dataset/**"
+      - ".github/workflows/jupyter-dataset-publish.yml"
+  push:
+    branches: [master]
+    paths:
+      - "jupyter-dataset/**"
+      - ".github/workflows/jupyter-dataset-publish.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: jupyter-dataset
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: jupyter-dataset/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build the wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Confirm the wheel contains the lab extension
+        run: unzip -l dist/*.whl | grep "share/jupyter/labextensions/jupyter-dataset/package.json"
+
+      - name: Confirm pip install enables the extension
+        run: |
+          python -m pip install "jupyterlab>=4,<5" dist/*.whl
+          jupyter labextension list 2>&1 | grep -ie "jupyter-dataset.*OK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jupyter-dataset-wheel
+          path: jupyter-dataset/dist/*.whl
+
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: jupyter-dataset-wheel
+          path: dist
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Publish the wheel to GitHub Packages
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python -m pip install --upgrade twine
+          twine upload --repository-url https://pypi.pkg.github.com/PolusAI/ dist/*.whl
