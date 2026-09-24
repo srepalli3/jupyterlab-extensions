@@ -1,4 +1,4 @@
-name: Publish jupyter-dataset
+name: Build and release jupyter-dataset
 
 on:
   pull_request:
@@ -6,11 +6,8 @@ on:
       - "jupyter-dataset/**"
       - ".github/workflows/jupyter-dataset-publish.yml"
   push:
-    branches: [master]
-    paths:
-      - "jupyter-dataset/**"
-      - ".github/workflows/jupyter-dataset-publish.yml"
-  workflow_dispatch:
+    tags:
+      - "jupyter-dataset-v*"
 
 jobs:
   build:
@@ -47,6 +44,16 @@ jobs:
           python -m pip install "jupyterlab>=4,<5" dist/*.whl
           jupyter labextension list 2>&1 | grep -ie "jupyter-dataset.*OK"
 
+      - name: Require the tag to match package.json
+        if: startsWith(github.ref, 'refs/tags/jupyter-dataset-v')
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          tag_version="${GITHUB_REF_NAME#jupyter-dataset-v}"
+          if [ "$version" != "$tag_version" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package.json version ${version}."
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: jupyter-dataset-wheel
@@ -54,25 +61,26 @@ jobs:
 
   publish:
     needs: build
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    if: startsWith(github.ref, 'refs/tags/jupyter-dataset-v')
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      packages: write
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: jupyter-dataset-wheel
           path: dist
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Publish the wheel to GitHub Packages
+      - name: Attach the wheel to the GitHub release
         env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python -m pip install --upgrade twine
-          twine upload --repository-url https://pypi.pkg.github.com/PolusAI/ dist/*.whl
+          notes="Python wheel for jupyter-dataset ${GITHUB_REF_NAME#jupyter-dataset-v}."
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.whl --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.whl \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" \
+              --notes "$notes"
+          fi
